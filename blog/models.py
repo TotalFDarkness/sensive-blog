@@ -1,7 +1,7 @@
 from django.db import models
 from django.urls import reverse
 from django.contrib.auth.models import User
-from django.db.models import Count
+from django.db.models import Count, Prefetch
 
 
 class TagQuerySet(models.QuerySet):
@@ -30,14 +30,33 @@ class PostQuerySet(models.QuerySet):
         annotate — для простых агрегаций, где вся работа делается на стороне БД.
         fetch_with_comments_count — для сложной логики, которую нельзя выразить через SQL.
         """
-        most_popular_posts_ids = [post.id for post in self]
-        posts_with_comments = Post.objects.filter(id__in=most_popular_posts_ids).annotate(comments_count=Count('comments'))
-        ids_and_comments = posts_with_comments.values_list('id', 'comments_count')
-        count_for_id = dict(ids_and_comments)
-
+        # Получаем ID всех постов в текущем QuerySet
+        post_ids = self.values_list('id', flat=True)
+        
+        # Создаем словарь {id: количество_комментариев} за один проход
+        comments_count_dict = dict(
+            Post.objects.filter(id__in=post_ids)
+            .annotate(comments_count=Count('comments'))
+            .values_list('id', 'comments_count')
+        )
+        
+        # Присваиваем каждому посту количество комментариев
         for post in self:
-            post.comments_count = count_for_id[post.id]
+            post.comments_count = comments_count_dict.get(post.id, 0)
+            
         return self
+
+    def prefetch_authors_and_tags(self):
+        """
+        Оптимизирует запросы: подгружает авторов и теги с количеством постов для каждого тега.
+        """
+        return self.prefetch_related(
+            'author',
+            Prefetch(
+                'tags',
+                queryset=Tag.objects.annotate(posts_count=Count('posts')).all()
+            )
+        )
 
 
 class Post(models.Model):
