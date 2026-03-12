@@ -1,7 +1,7 @@
 from django.db import models
 from django.urls import reverse
-from django.contrib.auth.models import User
-from django.db.models import Count, Prefetch
+from django.db.models import Count
+from django.contrib.auth.models import User, Prefetch
 
 
 class TagQuerySet(models.QuerySet):
@@ -17,45 +17,23 @@ class PostQuerySet(models.QuerySet):
     def fetch_with_comments_count(self):
         """
         Оптимизированный способ подсчёта комментариев для набора постов.
-
-        Отличия от annotate:
-        - Делает отдельный запрос, чтобы посчитать комментарии только для определенных ID.
-        - Можно добавить любую Python-логику
-        - Присваивает результат каждому посту вручную.
-        - Можно произвести фильтрацию, перед агрегацией.
-        - Решает проблему ресурсоемкости при использовании больше одного annotate.
-        - Дает полный контроль над запросами.
-
-        Когда использовать:
-        annotate — для простых агрегаций, где вся работа делается на стороне БД.
-        fetch_with_comments_count — для сложной логики, которую нельзя выразить через SQL.
         """
-        # Получаем ID всех постов в текущем QuerySet
-        post_ids = self.values_list('id', flat=True)
-        
-        # Создаем словарь {id: количество_комментариев} за один проход
-        comments_count_dict = dict(
-            Post.objects.filter(id__in=post_ids)
-            .annotate(comments_count=Count('comments'))
-            .values_list('id', 'comments_count')
-        )
-        
-        # Присваиваем каждому посту количество комментариев
+        most_popular_posts_ids = [post.id for post in self]
+        posts_with_comments = Post.objects.filter(id__in=most_popular_posts_ids).annotate(comments_count=Count('comments'))
+        ids_and_comments = posts_with_comments.values_list('id', 'comments_count')
+        count_for_id = dict(ids_and_comments)
+
         for post in self:
-            post.comments_count = comments_count_dict.get(post.id, 0)
-            
+            post.comments_count = count_for_id[post.id]
         return self
 
-    def prefetch_authors_and_tags(self):
+    def prefetch_tags_with_posts_count(self):
         """
-        Оптимизирует запросы: подгружает авторов и теги с количеством постов для каждого тега.
+        Предзагружает теги с количеством постов для каждого тега.
         """
         return self.prefetch_related(
-            'author',
-            Prefetch(
-                'tags',
-                queryset=Tag.objects.annotate(posts_count=Count('posts')).all()
-            )
+            Prefetch('tags',
+                    queryset=Tag.objects.annotate(posts_count=Count('posts')))
         )
 
 
